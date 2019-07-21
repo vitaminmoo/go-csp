@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"reflect"
 	"strings"
+	"unicode"
 )
 
 // CSP3 is a golang native representation of a Content Security Policy 3 policy
@@ -60,22 +61,71 @@ func NewCSP3() *CSP3 {
 }
 
 // FromString takes a string from a header and makes a CSP3 object from it
+// we use unicode whitespace here even though the spec says ascii because *meh*
 func FromString(header string) (*CSP3, error) {
-	return NewCSP3(), nil
-}
+	c := NewCSP3()
 
-var keywords = []string{
-	"none",
-	"self",
-	"unsafe-inline",
-	"unsafe-eval",
-	"strict-dynamic",
-	"unsafe-hashes",
-	"report-sample",
-	"unsafe-allow-redirects",
+	tagMap := make(map[string]string)
+	v := reflect.ValueOf(*c)
+	//t := reflect.TypeOf(c)
+	for i := 0; i < v.NumField(); i++ {
+		fieldName := v.Type().Field(i).Name
+		fieldTag := v.Type().Field(i).Tag
+		source, ok := fieldTag.Lookup("source")
+		if ok {
+			tagMap[source] = fieldName
+		}
+	}
+
+	tokens := strings.Split(header, ";")
+	for _, tokenRaw := range tokens {
+		token := strings.TrimSpace(tokenRaw)
+		if token == "" {
+			continue
+		}
+		var directiveName string
+		gotDirective := false
+		var rest string
+		for _, c := range token {
+			if gotDirective {
+				rest += string(c)
+				continue
+			}
+			if unicode.IsSpace(c) {
+				gotDirective = true
+				continue
+			}
+			directiveName += string(c)
+		}
+
+		directiveName = strings.ToLower(directiveName)
+		directiveValue := strings.Fields(rest)
+		r := reflect.ValueOf(c)
+		f := reflect.Indirect(r).FieldByName(tagMap[directiveName])
+		if f.CanSet() {
+			m := make(map[string]bool)
+			for _, source := range directiveValue {
+				m[source] = true
+			}
+			f.Set(reflect.ValueOf(m))
+		} else {
+			log.Printf("Can't set value of %v (from %v)", tagMap[directiveName], directiveName)
+		}
+	}
+	return c, nil
 }
 
 func isKeyword(kw string) string {
+	var keywords = []string{
+		"none",
+		"self",
+		"unsafe-inline",
+		"unsafe-eval",
+		"strict-dynamic",
+		"unsafe-hashes",
+		"report-sample",
+		"unsafe-allow-redirects",
+	}
 	for _, keyword := range keywords {
 		if kw == keyword {
 			return fmt.Sprintf("'%v'", kw)
